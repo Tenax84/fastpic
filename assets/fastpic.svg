@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="FastPic icon">
+  <defs>
+    <linearGradient id="tile" x1="34" y1="28" x2="224" y2="232" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00A8FF"/>
+      <stop offset="0.48" stop-color="#3478F6"/>
+      <stop offset="1" stop-color="#8B38F5"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="224" height="224" rx="52" fill="url(#tile)"/>
+  <circle cx="174" cy="79" r="18" fill="#fff"/>
+  <path fill="#fff" fill-rule="evenodd" d="M45 178c0-4 1-7 4-10l48-58c4-5 11-5 15 0l29 34 14-17c4-5 11-5 15 0l40 48c6 7 1 17-8 17H55c-6 0-10-5-10-10v-4Zm25-116h35L90 87h20l-43 49 10-37H55l15-37Z"/>
+</svg>

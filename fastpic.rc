@@ -1,0 +1,29 @@
+// Windows-erőforrások: alkalmazásikon és verzióinformáció. A build.rs fordítja rc.exe-vel.
+#pragma code_page(65001)
+
+1 ICON "assets/fastpic.ico"
+
+1 VERSIONINFO
+FILEVERSION     0,1,0,0
+PRODUCTVERSION  0,1,0,0
+FILEOS          0x40004
+FILETYPE        0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040E04B0"
+    BEGIN
+      VALUE "CompanyName",      "FastPic"
+      VALUE "FileDescription",  "FastPic képnézegető"
+      VALUE "FileVersion",      "0.1.0"
+      VALUE "InternalName",     "fastpic"
+      VALUE "OriginalFilename", "fastpic.exe"
+      VALUE "ProductName",      "FastPic"
+      VALUE "ProductVersion",   "0.1.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x040E, 1200
+  END
+END
