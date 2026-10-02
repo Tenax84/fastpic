@@ -50,6 +50,11 @@ impl WindowState {
         WindowState::parse(&std::fs::read_to_string(path).ok()?)
     }
 
+    /// Mint a `load`, de hiányzó útvonalat is elfogad.
+    pub fn load_if(path: Option<&Path>) -> Option<WindowState> {
+        WindowState::load(path?)
+    }
+
     /// Ideiglenes fájlba ír, majd átnevezi, így párhuzamosan záródó példányok sem
     /// hagyhatnak félig írt fájlt maguk után. Az utoljára záródó nyer.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {

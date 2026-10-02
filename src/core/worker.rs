@@ -22,8 +22,15 @@ pub struct Job {
 /// A platform dekódoló függvénye. `T` a UI-szálnak átadott, megjelenítésre kész eredmény.
 pub type DecodeFn<T> = dyn Fn(&Job, &dyn Fn() -> bool) -> Result<T, DecodeError> + Send + Sync;
 
+struct Queue {
+    jobs: Vec<Job>,
+    /// Lefutott feladatok, amelyek eredményét a UI még nem vette át. A kívánt listában
+    /// ilyenkor még szerepelnek – újra lefuttatni viszont tiszta pazarlás lenne.
+    done: Vec<u64>,
+}
+
 struct Shared {
-    queue: Mutex<Vec<Job>>,
+    queue: Mutex<Queue>,
     cv: Condvar,
     running: AtomicU64,
     cancel: AtomicBool,
@@ -38,7 +45,7 @@ impl<T: Send + 'static> Worker<T> {
     /// `thread_init` a szál elején fut (pl. COM inicializálás), `notify` minden eredmény után.
     pub fn spawn(thread_init: fn(), decode: Box<DecodeFn<T>>, notify: Box<dyn Fn() + Send>) -> Worker<T> {
         let shared = Arc::new(Shared {
-            queue: Mutex::new(Vec::new()),
+            queue: Mutex::new(Queue { jobs: Vec::new(), done: Vec::new() }),
             cv: Condvar::new(),
             running: AtomicU64::new(0),
             cancel: AtomicBool::new(false),
@@ -64,8 +71,10 @@ impl<T: Send + 'static> Worker<T> {
         if running != 0 && !jobs.iter().any(|j| j.id == running) {
             self.shared.cancel.store(true, Ordering::Release);
         }
-        jobs.retain(|j| j.id != running);
-        *q = jobs;
+        // Amit a UI már nem kér, arra az elkészült eredmény sem kell többé.
+        q.done.retain(|id| jobs.iter().any(|j| j.id == *id));
+        jobs.retain(|j| j.id != running && !q.done.contains(&j.id));
+        q.jobs = jobs;
         self.shared.cv.notify_one();
     }
 }
@@ -79,20 +88,68 @@ fn run<T>(
     loop {
         let job = {
             let mut q = s.queue.lock().unwrap();
-            while q.is_empty() {
+            while q.jobs.is_empty() {
                 q = s.cv.wait(q).unwrap();
             }
-            let job = q.remove(0);
+            let job = q.jobs.remove(0);
             s.running.store(job.id, Ordering::Release);
             s.cancel.store(false, Ordering::Release);
             job
         };
         let cancel = || s.cancel.load(Ordering::Acquire);
         let result = decode(&job, &cancel);
-        s.running.store(0, Ordering::Release);
+        {
+            // A zár alatt: különben egy közbeeső `set_jobs` még futónak hinné a feladatot,
+            // utána viszont már nem látná elkészültnek – és újraindítaná.
+            let mut q = s.queue.lock().unwrap();
+            s.running.store(0, Ordering::Release);
+            // Megszakított feladat nem hoz eredményt: azt szabad újra kérni.
+            if !matches!(result, Err(DecodeError::Cancelled)) {
+                q.done.push(job.id);
+            }
+        }
         if tx.send((job.id, result)).is_err() {
             return;
         }
         notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::RecvTimeoutError;
+    use std::time::Duration;
+
+    fn job(id: u64) -> Job {
+        Job { id, path: PathBuf::from("a.jpg"), target: Target::Full, prio: 0 }
+    }
+
+    /// A UI addig is a kívánt listában tartja a feladatot, amíg az eredményét át nem veszi
+    /// (pl. a mappalistázás végén). Ilyenkor tilos újra lefuttatni.
+    #[test]
+    fn elkeszult_feladat_nem_fut_ujra() {
+        let runs = Arc::new(AtomicU64::new(0));
+        let r = runs.clone();
+        let w: Worker<u64> = Worker::spawn(
+            || {},
+            Box::new(move |j, _| Ok(r.fetch_add(1, Ordering::SeqCst) + j.id)),
+            Box::new(|| {}),
+        );
+
+        w.set_jobs(vec![job(1)]);
+        assert_eq!(w.results.recv_timeout(Duration::from_secs(5)).unwrap().0, 1);
+
+        w.set_jobs(vec![job(1)]);
+        assert!(
+            matches!(w.results.recv_timeout(Duration::from_millis(200)), Err(RecvTimeoutError::Timeout)),
+            "a már elkészült feladat újrafutott"
+        );
+
+        // Ha a UI leveszi a listáról, az elkészült eredményről is elfelejtkezünk.
+        w.set_jobs(Vec::new());
+        w.set_jobs(vec![job(1)]);
+        assert_eq!(w.results.recv_timeout(Duration::from_secs(5)).unwrap().0, 1);
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
     }
 }

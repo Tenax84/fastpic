@@ -160,6 +160,8 @@ pub fn apply_orientation(src: Vec<u8>, w: u32, h: u32, orient: u16) -> (Vec<u8>,
 }
 
 /// Mint az `apply_orientation`, de a hívó által adott (azonos méretű) pufferbe ír.
+/// (macOS-en az ImageIO már forgatva adja vissza a képet, ott csak a teszt használja.)
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn apply_orientation_into(src: &[u8], w: u32, h: u32, orient: u16, out: &mut [u8]) -> (u32, u32) {
     let (w, h) = (w as usize, h as usize);
     assert!(src.len() >= w * h * 4 && out.len() >= w * h * 4);

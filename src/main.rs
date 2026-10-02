@@ -1,6 +1,8 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod core;
+#[cfg(target_os = "macos")]
+mod mac;
 #[cfg(windows)]
 mod win;
 
@@ -40,4 +42,6 @@ fn main() {
     let args = parse_args();
     #[cfg(windows)]
     win::run(args);
+    #[cfg(target_os = "macos")]
+    mac::run(args);
 }
