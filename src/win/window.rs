@@ -16,19 +16,23 @@ use windows::core::HSTRING;
 use super::placement;
 use super::render::{self, Button, ButtonBar, ImageDraw, Renderer, Scene, Texture};
 use super::shell;
+use super::update;
 use crate::core::decode::{DecodeError, MAX_VECTOR_SIDE, Target};
 use crate::core::exif_info::{self, InfoLines};
 use crate::core::folder::{self, Nav};
 use crate::core::state::WindowState;
+use crate::core::update::Release;
 use crate::core::view::{Mode, View};
 use crate::core::worker::{Job, Worker};
 
 pub const WM_APP_DECODED: u32 = WM_APP + 1;
 pub const WM_APP_LISTED: u32 = WM_APP + 2;
+pub const WM_APP_UPDATE: u32 = WM_APP + 3;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const TIMER_HIRES: usize = 1;
 const TIMER_HIDE_BUTTONS: usize = 2;
 const TIMER_BENCH: usize = 3;
+const TIMER_NOTICE: usize = 4;
 
 /// Az ablak azonosítója a háttérszálak számára (0, amíg nincs ablak).
 pub static HWND_VAL: AtomicIsize = AtomicIsize::new(0);
@@ -94,6 +98,9 @@ pub enum Modal {
     ConfirmDelete(PathBuf),
     Open,
     Edit(PathBuf),
+    OpenUrl(String),
+    /// A letöltött telepítő indítása, utána kilépés: (telepítő, újranyitandó kép).
+    Install(PathBuf, Option<PathBuf>),
 }
 
 pub struct Bench {
@@ -129,6 +136,14 @@ pub struct App {
     fullscreen: Option<WINDOWPLACEMENT>,
     state_path: Option<PathBuf>,
     bench: Option<Bench>,
+    update_checked: bool,
+    /// Elérhető újabb kiadás, és hogy telepítővel frissíthető-e (különben a kiadás oldala).
+    update: Option<(Release, bool)>,
+    /// Fut a telepítő letöltése.
+    update_busy: bool,
+    update_error: Option<String>,
+    /// Az értesítés néhány másodpercig magától is látszik, utána csak a gombokkal együtt.
+    notice_pinned: bool,
 }
 
 impl App {
@@ -167,6 +182,11 @@ impl App {
             fullscreen: None,
             state_path,
             bench,
+            update_checked: false,
+            update: None,
+            update_busy: false,
+            update_error: None,
+            notice_pinned: false,
         }
     }
 
@@ -367,6 +387,10 @@ impl App {
             self.listing_started = true;
             self.start_listing();
         }
+        if !self.update_checked && self.bench.is_none() && self.view.has_image() {
+            self.update_checked = true;
+            update::spawn_check();
+        }
         self.refresh_jobs();
         self.update_title();
         self.invalidate();
@@ -495,6 +519,69 @@ impl App {
         self.after_current_changed();
     }
 
+    fn pin_notice(&mut self) {
+        self.notice_pinned = true;
+        self.set_timer(TIMER_NOTICE, 10_000);
+        self.invalidate();
+    }
+
+    fn on_update(&mut self) -> Option<Modal> {
+        match update::take_event()? {
+            update::Event::Available(r) => {
+                let installable = r.installer.is_some() && update::is_installed();
+                self.update = Some((r, installable));
+                self.pin_notice();
+            }
+            update::Event::Ready(setup) => {
+                let reopen = (!self.nav.is_empty()).then(|| self.nav.current().to_path_buf());
+                return Some(Modal::Install(setup, reopen));
+            }
+            update::Event::Failed(e) => self.update_failed(e),
+        }
+        None
+    }
+
+    pub fn update_failed(&mut self, e: String) {
+        self.update_busy = false;
+        self.update_error = Some(format!("A frissítés nem sikerült: {e}"));
+        self.pin_notice();
+    }
+
+    /// U: telepített példánynál letöltés és telepítés, különben a kiadás oldala.
+    fn start_update(&mut self) -> Option<Modal> {
+        let (r, installable) = self.update.as_ref()?;
+        if self.update_busy {
+            return None;
+        }
+        match (&r.installer, installable) {
+            (Some(asset), true) => {
+                update::spawn_download(asset.clone());
+                self.update_busy = true;
+                self.update_error = None;
+                self.invalidate();
+                None
+            }
+            _ => Some(Modal::OpenUrl(r.page.clone())),
+        }
+    }
+
+    fn notice_text(&self) -> Option<String> {
+        if self.notice_pinned
+            && let Some(e) = &self.update_error
+        {
+            return Some(e.clone());
+        }
+        let (r, installable) = self.update.as_ref()?;
+        if self.update_busy {
+            return Some(format!("A FastPic {} letöltése…", r.version));
+        }
+        if !self.notice_pinned && !self.buttons_visible {
+            return None;
+        }
+        let action = if *installable { "frissítés" } else { "letöltési oldal" };
+        Some(format!("Elérhető a FastPic {}   ·   U: {action}", r.version))
+    }
+
     fn ensure_info(&mut self) {
         let cur = self.nav.current().to_path_buf();
         if self.info_cache.as_ref().is_some_and(|(p, _)| *p == cur) {
@@ -533,12 +620,14 @@ impl App {
             _ => None,
         };
         let has_image = image.is_some();
+        let notice = self.notice_text();
         let message = if self.nav.is_empty() { Some(EMPTY_HELP) } else { failed_msg.as_deref() };
         let scene = Scene {
             image,
             message,
             buttons: if self.buttons_visible { self.button_bar() } else { None },
             info: if self.show_info { self.info_cache.as_ref().map(|(_, l)| l) } else { None },
+            notice: notice.as_deref(),
             dpi_scale: s,
         };
         let (w, h) = render::client_size(self.hwnd);
@@ -658,6 +747,7 @@ impl App {
                 // A forgatás megváltoztatja a kijelzőméretű dekódolás célját.
                 self.refresh_jobs();
             }
+            VK_U => return self.start_update(),
             VK_I => {
                 self.show_info = !self.show_info;
                 self.invalidate();
@@ -839,6 +929,12 @@ impl App {
                         self.invalidate();
                     }
                     TIMER_BENCH => self.bench_finish(),
+                    TIMER_NOTICE => {
+                        self.kill_timer(TIMER_NOTICE);
+                        self.notice_pinned = false;
+                        self.update_error = None;
+                        self.invalidate();
+                    }
                     _ => {}
                 }
                 done
@@ -851,6 +947,7 @@ impl App {
                 self.on_listed();
                 done
             }
+            WM_APP_UPDATE => (Some(LRESULT(0)), self.on_update()),
             WM_ACTIVATEAPP => {
                 // Visszatéréskor frissítjük a mappalistát (új, törölt, átnevezett fájlok),
                 // és újratöltjük az aktuális képet, ha közben szerkesztették.
@@ -972,6 +1069,17 @@ pub fn run_modal(hwnd: HWND, modal: Modal) {
         Modal::Edit(path) => {
             if !shell::open_in_editor(hwnd, &path) {
                 shell::message(Some(hwnd), "Nem található képszerkesztő alkalmazás ehhez a fájltípushoz.", true);
+            }
+        }
+        Modal::OpenUrl(url) => shell::open_url(&url),
+        Modal::Install(setup, reopen) => {
+            if shell::launch(&setup, &update::installer_params(reopen.as_deref())) {
+                // A telepítő lecseréli az exe-t: kilépünk, a végén ő nyitja újra a képet.
+                unsafe {
+                    let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+                }
+            } else {
+                with_app(|a| a.update_failed("a telepítő nem indult el".into()));
             }
         }
         Modal::Open => {

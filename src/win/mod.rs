@@ -3,6 +3,7 @@
 mod placement;
 mod render;
 mod shell;
+mod update;
 mod wic;
 mod window;
 
@@ -95,6 +96,9 @@ fn config_dir() -> Option<PathBuf> {
 }
 
 pub fn run(args: Args) {
+    if args.fetch_update {
+        std::process::exit(update::fetch_child());
+    }
     if args.register {
         let ok = shell::register();
         shell::message(

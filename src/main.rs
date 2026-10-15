@@ -8,22 +8,26 @@ mod win;
 
 use std::path::PathBuf;
 
-/// Parancssor: `fastpic [kép]`, `--register`, `--unregister`, `--bench <kimeneti fájl> <kép>`.
+/// Parancssor: `fastpic [kép]`, `--register`, `--unregister`, `--bench <kimeneti fájl> <kép>`,
+/// `--fetch-update` (belső: a frissítés-ellenőrzés gyerekprocessze).
 pub struct Args {
     pub path: Option<PathBuf>,
     pub register: bool,
     pub unregister: bool,
     pub bench: Option<PathBuf>,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fetch_update: bool,
 }
 
 fn parse_args() -> Args {
-    let mut args = Args { path: None, register: false, unregister: false, bench: None };
+    let mut args = Args { path: None, register: false, unregister: false, bench: None, fetch_update: false };
     let mut it = std::env::args_os().skip(1);
     while let Some(a) = it.next() {
         match a.to_str() {
             Some("--register") => args.register = true,
             Some("--unregister") => args.unregister = true,
             Some("--bench") => args.bench = it.next().map(PathBuf::from),
+            Some("--fetch-update") => args.fetch_update = true,
             _ if args.path.is_none() => {
                 let p = PathBuf::from(a);
                 args.path = Some(std::path::absolute(&p).unwrap_or(p));

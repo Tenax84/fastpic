@@ -80,7 +80,25 @@ Root: HKA; Subkey: "Software\{#AppName}\Capabilities\FileAssociations"; ValueTyp
 [Run]
 Filename: "ms-settings:defaultapps?registeredAppUser={#AppName}"; Description: "Beállítás alapértelmezett képnézegetőként (Windows Beállítások)"; Flags: shellexec postinstall skipifsilent nowait unchecked
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: postinstall skipifsilent nowait unchecked
+; Programból indított frissítés (/SILENT /RELAUNCH=<kép>, lásd src/win/update.rs): a végén
+; újranyitjuk a képet, amit a felhasználó nézett ("-" = nem volt nyitva kép).
+Filename: "{app}\{#AppExe}"; Parameters: "{code:RelaunchParams}"; Flags: nowait runasoriginaluser; Check: ShouldRelaunch
 
 [UninstallDelete]
 ; A mentett ablakállapot (felhasználónként).
 Type: filesandordirs; Name: "{userappdata}\{#AppName}"
+
+[Code]
+function ShouldRelaunch: Boolean;
+begin
+  Result := WizardSilent and (ExpandConstant('{param:RELAUNCH|}') <> '');
+end;
+
+function RelaunchParams(Param: String): String;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|}');
+  if Result = '-' then
+    Result := ''
+  else
+    Result := AddQuotes(Result);
+end;

@@ -137,6 +137,8 @@ pub struct Scene<'a> {
     /// A látható overlay gombok (lapozás, szerkesztés), ha vannak.
     pub buttons: Option<ButtonBar>,
     pub info: Option<&'a InfoLines>,
+    /// Rövid értesítés az ablak alján (pl. elérhető frissítés).
+    pub notice: Option<&'a str>,
     pub dpi_scale: f32,
 }
 
@@ -353,7 +355,8 @@ impl Renderer {
             return;
         }
         let full = RECT { left: 0, top: 0, right: w as i32, bottom: h as i32 };
-        let overlays = scene.message.is_some() || scene.buttons.is_some() || scene.info.is_some();
+        let overlays =
+            scene.message.is_some() || scene.buttons.is_some() || scene.info.is_some() || scene.notice.is_some();
         if !overlays {
             // Csak kép: közvetlenül az ablakba rajzolunk, a háttérrel csak a kép körüli
             // részt töltjük ki (nincs villogás), és nem kell kliensméretű hátsó puffer.
@@ -423,15 +426,7 @@ impl Renderer {
                 let panel_w = ((460.0 * s) as i32).min(w as i32 - (24.0 * s) as i32).max(100);
                 let panel_h = pad * 2 + line_h * info.len() as i32;
                 let (x0, y0) = ((12.0 * s) as i32, (12.0 * s) as i32);
-                if self.black_dib.is_none() {
-                    self.black_dib = create_dib(1, 1).map(|(b, px)| {
-                        px.copy_from_slice(&[0, 0, 0, 255]);
-                        b
-                    });
-                }
-                if let Some(black) = self.black_dib {
-                    alpha_blit(dc, black, x0, y0, panel_w, panel_h, 1, 1, Some(184));
-                }
+                self.dim_rect(dc, x0, y0, panel_w, panel_h);
                 SetBkMode(dc, TRANSPARENT);
                 let old = SelectObject(dc, bold.into());
                 for (i, (label, value)) in info.iter().enumerate() {
@@ -452,7 +447,39 @@ impl Renderer {
                 SelectObject(dc, old);
             }
 
+            if let Some(notice) = scene.notice {
+                let (normal, _) = self.fonts(s);
+                let old = SelectObject(dc, normal.into());
+                let (pad_x, pad_y, margin) = ((14.0 * s) as i32, (8.0 * s) as i32, (16.0 * s) as i32);
+                let mut text: Vec<u16> = notice.encode_utf16().collect();
+                let flags = DT_SINGLELINE | DT_NOPREFIX;
+                let mut rc = RECT::default();
+                DrawTextW(dc, &mut text, &mut rc, flags | DT_CALCRECT);
+                let box_w = (rc.right + 2 * pad_x).min(w as i32 - 2 * margin).max(1);
+                let box_h = rc.bottom + 2 * pad_y;
+                let (x0, y0) = ((w as i32 - box_w) / 2, h as i32 - margin - box_h);
+                self.dim_rect(dc, x0, y0, box_w, box_h);
+                SetBkMode(dc, TRANSPARENT);
+                SetTextColor(dc, rgb(0xff, 0xff, 0xff));
+                let mut rc = RECT { left: x0 + pad_x, top: y0, right: x0 + box_w - pad_x, bottom: y0 + box_h };
+                DrawTextW(dc, &mut text, &mut rc, flags | DT_CENTER | DT_VCENTER | DT_END_ELLIPSIS);
+                SelectObject(dc, old);
+            }
+
             let _ = BitBlt(wnd_dc, 0, 0, w as i32, h as i32, Some(dc), 0, 0, SRCCOPY);
+        }
+    }
+
+    /// Félátlátszó fekete háttér a szöveges overlay-ek alá.
+    unsafe fn dim_rect(&mut self, dc: HDC, x: i32, y: i32, w: i32, h: i32) {
+        if self.black_dib.is_none() {
+            self.black_dib = create_dib(1, 1).map(|(b, px)| {
+                px.copy_from_slice(&[0, 0, 0, 255]);
+                b
+            });
+        }
+        if let Some(black) = self.black_dib {
+            unsafe { alpha_blit(dc, black, x, y, w, h, 1, 1, Some(184)) };
         }
     }
 }

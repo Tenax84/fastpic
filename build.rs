@@ -29,9 +29,11 @@ fn main() {
     println!("cargo:rustc-link-arg-bins={}", res.display());
 
     // Az induláshoz nem szükséges DLL-ek csak első használatkor töltődnek be
-    // (a COM-ot pl. a dekódoló szál tölti be, párhuzamosan az ablakkal).
+    // (a COM-ot pl. a dekódoló szál tölti be, párhuzamosan az ablakkal; a winhttp.dll-t a
+    // frissítés-ellenőrzés, az első kép után).
     println!("cargo:rustc-link-arg-bins=delayimp.lib");
-    for dll in ["shell32.dll", "shlwapi.dll", "ole32.dll", "oleaut32.dll", "combase.dll", "advapi32.dll"] {
+    for dll in ["shell32.dll", "shlwapi.dll", "ole32.dll", "oleaut32.dll", "combase.dll", "advapi32.dll", "winhttp.dll"]
+    {
         println!("cargo:rustc-link-arg-bins=/DELAYLOAD:{dll}");
     }
 }

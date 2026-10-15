@@ -36,6 +36,23 @@ pub fn spawn_viewer(path: &Path) {
     }
 }
 
+/// Webcím megnyitása az alapértelmezett böngészőben.
+pub fn open_url(url: &str) {
+    ensure_sta();
+    unsafe {
+        ShellExecuteW(None, w!("open"), &HSTRING::from(url), None, None, SW_SHOWNORMAL);
+    }
+}
+
+/// Program indítása a shellen keresztül (így a UAC-emelést kérő telepítő is elindul).
+pub fn launch(file: &Path, params: &str) -> bool {
+    ensure_sta();
+    let r = unsafe {
+        ShellExecuteW(None, w!("open"), &HSTRING::from(file.as_os_str()), &HSTRING::from(params), None, SW_SHOWNORMAL)
+    };
+    r.0 as isize > 32
+}
+
 fn ensure_sta() {
     // A UI-szálon csak akkor inicializáljuk a COM-ot, ha tényleg kell (indulási idő).
     thread_local!(static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });

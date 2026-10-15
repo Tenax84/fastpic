@@ -49,6 +49,7 @@ src/
     view.rs          zoom/pan/forgatás matek (kép-tér → képernyő mátrix)
     state.rs         ablakállapot (state.ini), atomi írás
     exif_info.rs     infópanel sorai
+    update.rs        frissítés: verzió-összehasonlítás, releases/latest JSON-elemzés, napi ütemezés, SHA-256
   win/
     mod.rs           run(): indulási sorrend, bench mód, memóriamérés
     window.rs        App: üzenetkezelés, entry-cache, előtöltés, nagyfelbontás, billentyűk/egér
@@ -56,6 +57,7 @@ src/
     wic.rs           WIC dekódolás közvetlenül DIB-be, JPEG DCT-prescale
     placement.rs     Get/SetWindowPlacement, teljes képernyő
     shell.rs         lomtár (IFileOperation), Ctrl+O párbeszéd, új példány, fájltársítás, StrCmpLogicalW
+    update.rs        frissítés-ellenőrzés (--fetch-update gyerekprocess, WinHTTP), telepítő letöltése
   mac/
     mod.rs           run(): indulási sorrend, főmenü, bench mód, memóriamérés (mach task_info + phys_footprint)
     window.rs        App + FastPicView (NSView) + Delegate (NSApplicationDelegate): események, entry-cache,
@@ -114,6 +116,7 @@ A kezelés a két platformon azonos, csak a módosítóbillentyű és néhány r
 | Szerkesztés | Ceruza gomb (jobb felső sarok, a lapozó gombokkal együtt jelenik meg) vagy `E`. Sorrend: Windows „Szerkesztés” ige → a fájltípus kezelői közül ismert képszerkesztő (`shell::EDITORS`, Store-appok is, pl. paint.net) → „Társítás ezzel” ablak. | macOS-en nincs „Szerkesztés” ige: a fájltípust kezelő appok közül (`NSWorkspace.URLsForApplicationsToOpenURL`) a legelőrébb való ismert szerkesztő (`mac::shell::EDITORS`, a lista végén az Előnézet). Ha egy sincs, hibaüzenet. |
 | Megnyitás | Ctrl+O, fogd és vidd (mappát is elfogad: az első képét nyitja). Ha már van kép az ablakban, **új processt** indít. | ⌘O; ugyanez, plusz a Finderből / LaunchServicesből érkező megnyitás (lásd [Multi-process](#multi-process)) |
 | Bezárás | Ctrl+W, Esc, ablak bezárása | ⌘W, Esc, ablak bezárása, ⌘Q (a minimális főmenüből) |
+| Frissítés | Új kiadásnál értesítés az ablak alján (10 mp-ig, utána a gombokkal együtt), `U` = frissítés. Telepített példány: a telepítő letöltése és csendes futtatása, utána ugyanaz a kép nyílik újra. Hordozható: a kiadás oldala nyílik meg. | **Nincs** (csak Windows) |
 
 Visszaváltáskor (ablakaktiválás) mindkét platformon frissül a mappalista, és ha az aktuális fájl módosult (mtime), újratöltődik; addig a régi kép látszik.
 
@@ -124,7 +127,7 @@ Visszaváltáskor (ablakaktiválás) mindkét platformon frissül a mappalista, 
 2. Dekódoló szál indul az első feladattal – párhuzamosan az ablak létrehozásával.
 3. Ablak létrehozása (`WS_EX_ACCEPTFILES`, sötét címsor), App telepítése, majd `SetWindowPlacement` → látható.
 4. Mappalistázás csak az első kép megjelenése **után**, háttérszálon (`StrCmpLogicalW` rendezés).
-5. Delay-load: shell32, shlwapi, ole32, oleaut32, combase, advapi32 – induláskor csak kernel32/user32/gdi32/dwmapi töltődik be. A COM-ot a dekódoló szál tölti be, párhuzamosan.
+5. Delay-load: shell32, shlwapi, ole32, oleaut32, combase, advapi32, winhttp – induláskor csak kernel32/user32/gdi32/dwmapi töltődik be. A COM-ot a dekódoló szál tölti be, párhuzamosan.
 
 ### Indulás (sorrend a `mac::run`-ban)
 1. `state.ini` beolvasása (`~/Library/Application Support/FastPic/`). A **kliensméretet pixelben** mentjük, így a célméret az `NSScreen` (és így az AppKit betöltése) **nélkül** is megvan.
@@ -158,6 +161,15 @@ A `Worker` **nyilvántartja az elkészült, de át nem vett feladatokat** (`Queu
 - Az implicit animációkat ki kell kapcsolni (`CATransaction::setDisableActions`), különben a lapozás és a zoom „becsúszna”.
 - Zoom: a réteg `bounds` + `contentsScale` (a `view.rs` mátrixából számolva), forgatás: `setAffineTransform`. Szűrő: 100% fölött, **teljes felbontású** textúránál `kCAFilterNearest` (éles pixelek), egyébként `kCAFilterTrilinear` – az előnézetet és a zoom közbeni köztes állapotot mindig simítva nagyítjuk.
 - A gombok ugyanazok a CPU-n generált, élsimított sprite-ok, mint Windowson, `backingScaleFactor` szerinti skálán raszterizálva.
+
+### Frissítés (csak Windows)
+- **Nem a kritikus úton:** az első megjelenített kép után indul egy rövid életű szál, 3 mp-et vár, és csak akkor kérdez, ha esedékes. Bench módban nem fut.
+- **Ütemezés:** `%APPDATA%\FastPic\update.ini` (`check=0` → soha; `last=` Unix-idő). Naponta legfeljebb egyszer; az időpontot a lekérés **előtt** írja be, így a párhuzamos példányok közül csak egy kérdez. Külön fájl, mert a `state.ini`-t bezáráskor egészében felülírja az utoljára záródó példány.
+- **A lekérés külön processben fut** (`fastpic.exe --fetch-update`, a JSON-t a stdout-ra írja). Mért döntés: processen belül a WinHTTP a TLS-sel és a tanúsítványkezeléssel együtt a process végéig bent maradt (+5,3 MB working set, +1 MB private, +4 állandó szál). Gyerekprocesszel a nézegetőn mérve +0,1 MB. **Ne vidd vissza a processen belülre mérés nélkül.** A winhttp.dll emellett delay-load.
+- `api.github.com/repos/Tenax84/fastpic/releases/latest` → `tag_name` (`vX.Y.Z`), `html_url`, és a `FastPic-Setup-` kezdetű `.exe` asset `browser_download_url` + `digest` (sha256) mezője. Saját mini JSON-elemző, serde nélkül. Letöltés csak a `github.com/Tenax84/fastpic/releases/download/` alól.
+- **Telepített vagy hordozható:** az exe mellett van-e `unins000.exe`. Telepítettnél `U` → letöltés `%TEMP%\FastPic-update\` alá (ez processen belül fut, utána úgyis kilépünk), SHA-256-ellenőrzés, majd `ShellExecute`: `/SILENT /SP- /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS "/RELAUNCH=<kép>"`, és az ablak bezárul. A többi futó példányt az Inno restart managere zárja be, a végén az `.iss` `[Run]`-ja (`ShouldRelaunch`) nyitja újra a képet. Hordozhatónál `U` = a kiadás oldala a böngészőben.
+- **Biztonság:** a lenyomat ugyanarról az API-ról jön, így csak a sérült letöltés ellen véd. Kódaláírás után (5. mérföldkő) kell mellé `WinVerifyTrust`.
+- **Kiadáskor:** a tag `vX.Y.Z` legyen (a `CARGO_PKG_VERSION`-höz hasonlítunk), és a telepítő `FastPic-Setup-*.exe` néven kerüljön a kiadásba.
 
 ### Ablakállapot
 - **Windows:** `GetWindowPlacement` / `SetWindowPlacement`; indításkor `MonitorFromRect` ellenőrzés – ha a monitor már nincs, alapértelmezett ablak.
@@ -210,13 +222,15 @@ A maximalizált 1080p-s eset kicsit a cél felett van. A kritikus út a WIC JPEG
 - A dekóderek debug buildben is `opt-level = 3` (`profile.dev.package."*"`), különben a fejlesztés közbeni mérések félrevezetők.
 - `fastpic [kép vagy mappa]` – megnyitás.
 - `fastpic --bench <kimenet.txt> <kép>` – első látható kép (`preview_ms`) és első végleges felbontású kép (`first_image_ms`) ideje, memória, fázisidők (`mark_*`), majd kilép. Bench módban nem ment ablakállapotot.
-- `cargo test` – a `core` unit tesztjei (formátum, lapozás, állapot, zoom/forgatás matek, orientáció, feladatsor).
+- `cargo test` – a `core` unit tesztjei (formátum, lapozás, állapot, zoom/forgatás matek, orientáció, feladatsor, frissítés).
+- `cargo test --release -- --ignored network` (Windows) – valódi lekérés a GitHubról, a telepítő letöltése és a lenyomat ellenőrzése.
 
 ### Windows
 - `build.rs`: manifest beágyazása, `fastpic.rc` fordítása a Windows SDK `rc.exe`-jével (ikon + verzióinfó), és delay-load (`delayimp.lib` + `/DELAYLOAD`) – külön build-függőség nélkül.
 - `.\scripts\build-release.ps1` – tesztek, release build, telepítő. Kell hozzá: Inno Setup 6. A verziószám az exe verzióinfójából jön (`fastpic.rc` → `FILEVERSION`; a `Cargo.toml` verziójával együtt emeld).
 - A telepítő a `--register`-rel azonos registry-bejegyzéseket írja (HKCU vagy HKLM a telepítési módtól függően), eltávolításkor mindent töröl, a `%APPDATA%\FastPic`-et is. Új kiterjesztésnél a `formats.rs` `EXTENSIONS` listája mellett az `installer/fastpic.iss` `Exts` listáját is frissítsd.
 - Ikon: az `assets/make_icon.py` generálja (Codex készítette); módosítás után futtasd újra.
+- `fastpic.exe --fetch-update` – belső kapcsoló: a frissítés-ellenőrzés gyerekprocessze (a kiadás JSON-ját a stdout-ra írja).
 - `fastpic.exe --register` / `--unregister` – fájltársítás HKCU alatt (rendszergazda nélkül), utána megnyílik a Beállítások „Alapértelmezett alkalmazások” oldala. Windows 11-en az alapértelmezést a felhasználónak kell kiválasztania.
 - `.\scripts\measure.ps1 -Image <kép> [-Runs 5]` – ismételt mérés, medián.
 
